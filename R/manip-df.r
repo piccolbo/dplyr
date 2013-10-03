@@ -3,13 +3,11 @@
 #' @param .data a data frame
 #' @param ... variables interpreted in the context of \code{.data}
 #' @examples
-#' data("baseball", package = "plyr")
-#
-#' filter(baseball, year > 2005, g > 130)
-#' head(select(baseball, id:team))
-#' summarise(baseball, g = mean(g), n = count())
-#' head(mutate(baseball, rbi = 1.0 * r / ab))
-#' head(arrange(baseball, id, desc(year)))
+#' filter(hflights, Month == 1, DayofMonth == 1, Dest == "DFW")
+#' head(select(hflights, Year:DayOfWeek))
+#' summarise(hflights, delay = mean(ArrDelay, na.rm = TRUE), n = length(ArrDelay))
+#' head(mutate(hflights, gained = ArrDelay - DepDelay))
+#' head(arrange(hflights, Dest, desc(ArrDelay)))
 #'
 #' @name manip_df
 NULL
@@ -17,19 +15,19 @@ NULL
 #' @rdname manip_df
 #' @export
 #' @method filter data.frame
-filter.data.frame <- function(.data, ...) {
+filter.data.frame <- function(.data, ..., env = parent.frame()) {
   conds <- dots(...)
 
-  r <- vapply(conds, eval, env = .data, enclos = parent.frame(),
+  r <- vapply(conds, eval, env = .data, enclos = env,
     FUN.VALUE = logical(nrow(.data)))
 
   all <- rowSums(r, na.rm = TRUE) == ncol(r)
   .data[all, , drop = FALSE]
 }
 
-#' @S3method filter source_df
-filter.source_df <- function(.data, ...) {
-  source_df(filter.data.frame(.data, ...))
+#' @S3method filter tbl_df
+filter.tbl_df <- function(.data, ..., env = parent.frame()) {
+  tbl_df(filter.data.frame(.data, ..., env = env))
 }
 
 #' @rdname manip_df
@@ -40,16 +38,16 @@ summarise.data.frame <- function(.data, ...) {
   data_env <- list2env(.data, parent = parent.frame())
   data_env$count <- function() nrow(.data)
 
-  for (col in names(cols)) {
-    data_env[[col]] <- eval(cols[[col]], data_env)
+  for (i in seq_along(cols)) {
+    data_env[[names(cols)[i]]] <- eval(cols[[i]], data_env)
   }
 
-  as_df(mget(names(cols), data_env))
+  as_df(mget(unique(names(cols)), data_env))
 }
 
-#' @S3method summarise source_df
-summarise.source_df <- function(.data, ...) {
-  source_df(summarise.data.frame(.data, ...))
+#' @S3method summarise tbl_df
+summarise.tbl_df <- function(.data, ...) {
+  tbl_df(summarise.data.frame(.data, ...))
 }
 
 
@@ -60,17 +58,17 @@ mutate.data.frame <- function(.data, ...) {
   cols <- named_dots(...)
   data_env <- list2env(.data, parent = parent.frame())
 
-  for(col in names(cols)) {
-    data_env[[col]] <- eval(cols[[col]], data_env)
+  for(i in seq_along(cols)) {
+    data_env[[names(cols)[i]]] <- eval(cols[[i]], data_env)
   }
 
   out_cols <- union(names(.data), names(cols))
   as_df(mget(out_cols, data_env))
 }
 
-#' @S3method mutate source_df
-mutate.source_df <- function(.data, ...) {
-  source_df(mutate.data.frame(.data, ...))
+#' @S3method mutate tbl_df
+mutate.tbl_df <- function(.data, ...) {
+  tbl_df(mutate.data.frame(.data, ...))
 }
 
 #' @rdname manip_df
@@ -84,22 +82,24 @@ arrange.data.frame <- function(.data, ...) {
   .data[r, , drop = FALSE]
 }
 
-#' @S3method arrange source_df
-arrange.source_df <- function(.data, ...) {
-  source_df(arrange.data.frame(.data, ...))
+#' @S3method arrange tbl_df
+arrange.tbl_df <- function(.data, ...) {
+  tbl_df(arrange.data.frame(.data, ...))
 }
 
 #' @rdname manip_df
 #' @export
 #' @method select data.frame
 select.data.frame <- function(.data, ...) {
-  input <- var_eval(.data, dots(...), parent.frame())
-  .data[, input, drop = FALSE]
+  input <- var_eval(dots(...), .data, parent.frame())
+  input_vars <- vapply(input, as.character, character(1))
+  
+  .data[, input_vars, drop = FALSE]
 }
 
-#' @S3method select source_df
-select.source_df <- function(.data, ...) {
-  source_df(select.data.frame(.data, ...))
+#' @S3method select tbl_df
+select.tbl_df <- function(.data, ...) {
+  tbl_df(select.data.frame(.data, ...))
 }
 
 #' @S3method do data.frame
@@ -107,7 +107,7 @@ do.data.frame <- function(.data, .f, ...) {
   list(.f(.data, ...))
 }
 
-#' @S3method do source_df
-do.source_df <- function(.data, .f, ...) {
+#' @S3method do tbl_df
+do.tbl_df <- function(.data, .f, ...) {
   list(.f(.data, ...))
 }

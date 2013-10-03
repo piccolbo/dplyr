@@ -3,9 +3,9 @@ NULL
 
 #' Create an sql variant.
 #'
-#' When creating a package that maps to a new SQL based datasource, you'll often
+#' When creating a package that maps to a new SQL based src, you'll often
 #' want to provide some additional mappings from common R commands to the
-#' commands that your data source provides. These three functions make that
+#' commands that your tbl provides. These three functions make that
 #' easy.
 #'
 #' @section Helper functions:
@@ -54,7 +54,7 @@ sql_infix <- function(f) {
 
   f <- toupper(f)
   function(x, y) {
-    sql(sprintf("%s %s %s", escape(x), f, escape(y)))
+    build_sql(x, " ", sql(f), " ", y)
   }
 }
 
@@ -65,7 +65,7 @@ sql_prefix <- function(f) {
 
   f <- toupper(f)
   function(...) {
-    sql(sprintf("%s(%s)", f, paste(escape(list(...)), collapse = ", ")))
+    build_sql(sql(f), list(...))
   }
 }
 

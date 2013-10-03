@@ -6,23 +6,28 @@
 #'   prior to modification to avoid changes propagating via reference.
 #' @examples
 #' if (require("data.table")) {
-#' data("baseball", package = "plyr")
-#' baseball_dt <- as.data.table(baseball)
-#' players <- group_by(baseball_dt, id)
+#' hflights2 <- tbl_dt(hflights)
+#' by_dest <- group_by(hflights2, Dest)
 #
-#' filter(players, g == max(g))
-#' summarise(players, g = mean(g))
-#' mutate(players, cyear = year - min(year) + 1)
-#' arrange(players, id, desc(year))
-#' select(players, id:team)
+#' filter(by_dest, ArrDelay == max(ArrDelay, na.rm = TRUE))
+#' summarise(by_dest, arr = mean(ArrDelay, na.rm = TRUE))
+#' 
+#' # Normalise arrival and departure delays by airport
+#' scaled <- mutate(by_dest, arr_z = scale(ArrDelay), dep_z = scale(DepDelay))
+#' select(scaled, Year:DayOfWeek, Dest, arr_z:dep_z)
+#' 
+#' arrange(by_dest, desc(ArrDelay))
+#' select(by_dest, -(DayOfWeek:TailNum))
 #'
 #' # All manip functions preserve grouping structure, except for summarise
-#' # (for hopefully obvious reasons)
-#' by_year <- mutate(players, cyear = year - min(year) + 1)
-#' summarise(by_year, years = max(cyear))
+#' # which removes a grouping level
+#' by_day <- group_by(hflights, Year, Month, DayofMonth)
+#' by_month <- summarise(by_day, delayed = sum(ArrDelay > 0, na.rm = TRUE))
+#' by_month
+#' summarise(by_month, delayed = sum(delayed))
 #'
 #' # You can also manually ungroup:
-#' arrange(ungroup(by_year), id, year)
+#' ungroup(by_day)
 #' }
 #' @name manip_grouped_dt
 NULL
@@ -31,18 +36,25 @@ NULL
 #' @export
 #' @method filter grouped_dt
 filter.grouped_dt <- function(.data, ...) {
-  expr <- and_expr(dots(...))
+  # Set keys, if needed
+  keys <- deparse_all(groups(.data))
+  if (!identical(keys, key(.data))) {
+    setkeyv(.data, keys)
+  }
 
   env <- new.env(parent = parent.frame(), size = 1L)
-  env$data <- .data$obj
-  env$vars <- deparse_all(.data$vars)
+  env$data <- .data
+  env$vars <- deparse_all(groups(.data))
 
-  call <- substitute(data[data[, .I[expr], by = vars]$V1])
-  out <- eval(call, env)
+  # http://stackoverflow.com/questions/16573995/subset-by-group-with-data-table
+  expr <- and_expr(dots(...))
+  call <- substitute(data[, .I[expr], by = vars])
+  indices <- eval(call, env)$V1
+  out <- .data[indices[!is.na(indices)]]
 
   grouped_dt(
     data = out,
-    vars = .data$vars
+    vars = groups(.data)
   )
 }
 
@@ -51,23 +63,30 @@ filter.grouped_dt <- function(.data, ...) {
 #' @method summarise grouped_dt
 summarise.grouped_dt <- function(.data, ...) {
   # Set keys, if needed
-  keys <- deparse_all(.data$vars)
-  if (!identical(keys, key(.data$obj))) {
-    setkeyv(.data$obj, keys)
+  keys <- deparse_all(groups(.data))
+  if (!identical(keys, key(.data))) {
+    setkeyv(.data, keys)
   }
 
   cols <- named_dots(...)
-  list_call <- as.call(c(quote(list), named_dots(...)))
+  # Replace n() with .N
+  for (i in seq_along(cols)) {
+    if (identical(cols[[i]], quote(n()))) {
+      cols[[i]] <- quote(.N)
+    }
+  }
+  
+  list_call <- as.call(c(quote(list), cols))
   call <- substitute(data[, list_call, by = vars])
 
   env <- new.env(parent = parent.frame(), size = 1L)
-  env$data <- .data$obj
+  env$data <- .data
   env$vars <- keys
   out <- eval(call, env)
 
   grouped_dt(
     data = out,
-    vars = .data$vars
+    vars = groups(.data)[-length(keys)]
   )
 }
 
@@ -75,11 +94,11 @@ summarise.grouped_dt <- function(.data, ...) {
 #' @export
 #' @method mutate grouped_dt
 mutate.grouped_dt <- function(.data, ..., inplace = FALSE) {
-  data <- .data$obj
+  data <- .data
   # Set keys, if needed
-  keys <- deparse_all(.data$vars)
-  if (!identical(keys, key(.data$obj))) {
-    setkeyv(.data$obj, keys)
+  keys <- deparse_all(groups(.data))
+  if (!identical(keys, key(.data))) {
+    setkeyv(.data, keys)
   }
   if (!inplace) data <- copy(data)
 
@@ -97,7 +116,7 @@ mutate.grouped_dt <- function(.data, ..., inplace = FALSE) {
 
   grouped_dt(
     data = data,
-    vars = .data$vars
+    vars = groups(.data)
   )
 }
 
@@ -105,19 +124,19 @@ mutate.grouped_dt <- function(.data, ..., inplace = FALSE) {
 #' @export
 #' @method arrange grouped_dt
 arrange.grouped_dt <- function(.data, ...) {
-  keys <- deparse_all(.data$vars)
+  keys <- deparse_all(groups(.data))
 
-  order_call <- as.call(c(quote(order), .data$vars, dots(...)))
+  order_call <- as.call(c(quote(order), groups(.data), dots(...)))
   call <- substitute(data[order_call])
 
   env <- new.env(parent = parent.frame(), size = 1L)
-  env$data <- .data$obj
+  env$data <- .data
 
   out <- eval(call, env)
 
   grouped_dt(
     data = out,
-    vars = .data$vars
+    vars = groups(.data)
   )
 }
 
@@ -125,23 +144,24 @@ arrange.grouped_dt <- function(.data, ...) {
 #' @export
 #' @method select grouped_dt
 select.grouped_dt <- function(.data, ...) {
-  input <- var_eval(.data$obj, dots(...), parent.frame())
-  out <- .data$obj[, input, drop = FALSE, with = FALSE]
+  input <- var_eval(dots(...), .data, parent.frame())
+  input_vars <- vapply(input, as.character, character(1))
+  out <- .data[, input_vars, drop = FALSE, with = FALSE]
 
   grouped_dt(
     data = out,
-    vars = .data$vars
+    vars = groups(.data)
   )
 }
 
 
 #' @S3method do grouped_dt
 do.grouped_dt <- function(.data, .f, ...) {
-  keys <- deparse_all(.data$vars)
-  setkeyv(.data$obj, keys)
+  keys <- deparse_all(groups(.data))
+  setkeyv(.data, keys)
 
   env <- new.env(parent = parent.frame(), size = 1L)
-  env$data <- .data$obj
+  env$data <- .data
   env$vars <- keys
   env$f <- .f
 

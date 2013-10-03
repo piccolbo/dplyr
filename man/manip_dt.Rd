@@ -7,7 +7,8 @@
 \alias{summarise.data.table}
 \title{Data manipulation for data tables.}
 \usage{
-  \method{filter}{data.table} (.data, ...)
+  \method{filter}{data.table} (.data, ...,
+    .env = parent.frame())
 
   \method{summarise}{data.table} (.data, ...)
 
@@ -32,18 +33,21 @@
 }
 \examples{
 if (require("data.table")) {
-data("baseball", package = "plyr")
-
 # If you start with a data table, you end up with a data table
-baseball <- as.data.table(baseball)
-filter(baseball, year > 2005, g > 130)
-head(select(baseball, id:team))
-summarise(baseball, g = mean(g))
-head(mutate(baseball, rbi = r / ab, rbi2 = rbi ^ 2))
-head(arrange(baseball, id, desc(year)))
+hflights <- as.data.table(hflights)
+filter(hflights, Month == 1, DayofMonth == 1, Dest == "DFW")
+head(select(hflights, Year:DayOfWeek))
+summarise(hflights, delay = mean(ArrDelay, na.rm = TRUE), n = length(ArrDelay))
+head(mutate(hflights, gained = ArrDelay - DepDelay))
+head(arrange(hflights, Dest, desc(ArrDelay)))
 
-# If you start with a source, you end up with a source
-baseball_s <- as.source(baseball)
+# If you start with a tbl, you end up with a tbl
+hflights2 <- as.tbl(hflights)
+filter(hflights2, Month == 1, DayofMonth == 1, Dest == "DFW")
+head(select(hflights2, Year:DayOfWeek))
+summarise(hflights2, delay = mean(ArrDelay, na.rm = TRUE), n = length(ArrDelay))
+head(mutate(hflights2, gained = ArrDelay - DepDelay))
+head(arrange(hflights2, Dest, desc(ArrDelay)))
 }
 }
 

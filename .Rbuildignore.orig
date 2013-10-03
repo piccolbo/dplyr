@@ -1,0 +1,8 @@
+bench
+notes
+^.*\.Rproj$
+^\.Rproj\.user$
+<<<<<<< HEAD
+=======
+.Rprofile
+>>>>>>> 701259b0fda55decc8270ed366891e68c3883c06

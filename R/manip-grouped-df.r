@@ -6,23 +6,27 @@
 #' @param .data a data frame
 #' @param ... variables interpreted in the context of \code{.data}
 #' @examples
-#' data("baseball", package = "plyr")
-#' players <- group_by(baseball, id)
+#' by_dest <- group_by(hflights, Dest)
 #
-#' filter(players, g == max(g))
-#' summarise(players, g = mean(g))
-#' mutate(players, cyear = year - min(year) + 1)
-#' select(mutate(players, cyear = year - min(year) + 1), id, year, cyear)
-#' arrange(players, desc(year))
-#' select(players, id:team)
+#' filter(by_dest, ArrDelay == max(ArrDelay))
+#' summarise(by_dest, arr = mean(ArrDelay, na.rm = TRUE))
+#' 
+#' # Normalise arrival and departure delays by airport
+#' scaled <- mutate(by_dest, arr_z = scale(ArrDelay), dep_z = scale(DepDelay))
+#' select(scaled, Year:DayOfWeek, Dest, arr_z:dep_z)
+#' 
+#' arrange(by_dest, desc(ArrDelay))
+#' select(by_dest, -(DayOfWeek:TailNum))
 #'
 #' # All manip functions preserve grouping structure, except for summarise
-#' # (for hopefully obvious reasons)
-#' by_year <- mutate(players, cyear = year - min(year) + 1)
-#' summarise(by_year, years = max(cyear))
+#' # which removes a grouping level
+#' by_day <- group_by(hflights, Year, Month, DayofMonth)
+#' by_month <- summarise(by_day, delayed = sum(ArrDelay > 0, na.rm = TRUE))
+#' by_month
+#' summarise(by_month, delayed = sum(delayed))
 #'
 #' # You can also manually ungroup:
-#' df <- arrange(ungroup(by_year), id, year)
+#' ungroup(by_day)
 #'
 #' @name manip_grouped_df
 NULL
@@ -57,6 +61,8 @@ summarise.grouped_df <- function(.data, ...) {
   calls <- named_dots(...)
   if (is.lazy(.data)) .data <- build_index(.data)
   v <- make_view(.data, parent.frame())
+  v$add_function("n", function() length(rows))
+
   ngrps <- length(attr(.data, "index"))
 
   output_summary <- function(j) {
@@ -67,10 +73,10 @@ summarise.grouped_df <- function(.data, ...) {
     }
   }
 
-  out <- vector("list", length(calls))
-  names(out) <- names(calls)
+  out_cols <- unique(names(calls))
+  out <- setNames(vector("list", length(out_cols)), out_cols)
 
-  for (j in seq_along(out)) {
+  for (j in seq_along(calls)) {
     for (i in seq_len(ngrps)) {
       rows <- v$set_group(i)
       if (i == 1L) {
@@ -82,14 +88,20 @@ summarise.grouped_df <- function(.data, ...) {
         col[[i]] <- v$eval(calls[[j]])
       }
     }
-    out[[j]] <- col
+    out[[names(calls)[j]]] <- col
 
     name <- names(calls)[[j]]
     v$add_binding(name, output_summary(name))
   }
-
+  
   out <- c(attr(.data, "labels"), out) # expensive operation
-  source_df(as_df(out))
+  
+  grp_vars <- attr(.data, "vars")
+  if (length(grp_vars) == 1L) {
+    tbl_df(as_df(out))
+  } else {
+    grouped_df(as_df(out), grp_vars[-length(grp_vars)])
+  }
 }
 
 #' @rdname manip_grouped_df
@@ -109,10 +121,10 @@ mutate.grouped_df <- function(.data, ...) {
     }
   }
 
-  out <- vector("list", length(calls))
-  names(out) <- names(calls)
+  out_cols <- unique(names(calls))
+  out <- setNames(vector("list", length(out_cols)), out_cols)
 
-  for (j in seq_along(out)) {
+  for (j in seq_along(calls)) {
     for (i in seq_len(ngrps)) {
       rows <- v$set_group(i)
       if (i == 1L) {
@@ -127,7 +139,7 @@ mutate.grouped_df <- function(.data, ...) {
       }
     }
 
-    out[[j]] <- col
+    out[[names(calls)[j]]] <- col
 
     name <- names(calls)[[j]]
     v$add_binding(name, output_var(name))
@@ -156,8 +168,8 @@ arrange.grouped_df <- function(.data, ...) {
 #' @method select grouped_df
 select.grouped_df <- function(.data, ...) {
   input <- var_eval(dots(...), .data, parent.frame())
-
-  grouped_df(.data[, input, drop = FALSE], attr(.data, "vars"))
+  vars <- vapply(input, as.character, character(1))
+  grouped_df(.data[, vars, drop = FALSE], attr(.data, "vars"))
 }
 
 #' @S3method do grouped_df

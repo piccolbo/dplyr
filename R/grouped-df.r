@@ -1,10 +1,11 @@
 #' A grouped data frame.
 #'
 #' The easiest way to create a grouped data frame is to call the \code{group_by}
-#' method on a data frame or data source: this will take care of capturing
+#' method on a data frame or tbl: this will take care of capturing
 #' the unevalated expressions for you.
 #'
-#' @param data a data source or data frame.
+#' @keywords internal
+#' @param data a tbl or data frame.
 #' @param vars a list of quoted variables.
 #' @param lazy if \code{TRUE}, index will be computed lazily every time it
 #'   is needed. If \code{FALSE}, index will be computed up front on object
@@ -12,14 +13,25 @@
 #' @param drop if \code{TRUE} preserve all factor levels, even those without
 #'   data.
 grouped_df <- function(data, vars, lazy = TRUE, drop = TRUE) {
+  if (length(vars) == 0) {
+    return(tbl_df(data))
+  }
+
+  assert_that(is.data.frame(data), is.list(vars), is.flag(lazy), is.flag(drop))
+  
   attr(data, "vars") <- vars
   attr(data, "drop") <- drop
   if (!lazy) {
     data <- build_index(data)
   }
 
-  class(data) <- c("grouped_df", "source_df", "source", class(data))
+  class(data) <- c("grouped_df", "tbl_df", "tbl", class(data))
   data
+}
+
+#' @S3method groups data.frame
+groups.data.frame <- function(x) {
+  attr(x, "vars")
 }
 
 #' @rdname grouped_df
@@ -36,40 +48,52 @@ is.grouped_df <- function(x) inherits(x, "grouped_df")
 #' @S3method print grouped_df
 print.grouped_df <- function(x, ...) {
   cat("Source: local data frame ", dim_desc(x), "\n", sep = "")
-  cat("Groups: ", commas(deparse_all(attr(x, "vars"))), "\n", sep = "")
+  cat("Groups: ", commas(deparse_all(groups(x))), "\n", sep = "")
   cat("\n")
   trunc_mat(x)
 }
 
-#' @param x object (data frame or \code{\link{source_df}}) to group
+#' @S3method group_size grouped_df
+group_size.grouped_df <- function(x) {
+  if (is.lazy(x)) x <- build_index(x)
+  vapply(attr(x, "index"), length, integer(1))
+}
+
+
+#' @param x object (data frame or \code{\link{tbl_df}}) to group
 #' @param ... unquoted variables to group by
 #' @method group_by data.frame
 #' @export
 #' @rdname grouped_df
 group_by.data.frame <- function(x, ..., drop = TRUE) {
   vars <- named_dots(...)
-  grouped_df(x, c(x$group_by, vars), lazy = FALSE)
+  grouped_df(x, c(groups(x), vars), lazy = FALSE)
 }
-
 
 #' @S3method as.data.frame grouped_df
 as.data.frame.grouped_df <- function(x, row.names = NULL,
                                             optional = FALSE, ...) {
-  if (!is.null(row.names)) warning("row.names argument ignored", call. = FALSE)
-  if (!identical(optional, FALSE)) warning("optional argument ignored", call. = FALSE)
+#   if (!is.null(row.names)) warning("row.names argument ignored", call. = FALSE)
+#   if (!identical(optional, FALSE)) warning("optional argument ignored", call. = FALSE)
 
   attr(x, "vars") <- NULL
   attr(x, "index") <- NULL
   attr(x, "labels") <- NULL
   attr(x, "drop") <- NULL
 
-  class(x) <- setdiff(class(x), c("grouped_df", "source_df", "source"))
+  class(x) <- setdiff(class(x), c("grouped_df", "tbl_df", "tbl"))
   x
 }
 
 #' @S3method ungroup grouped_df
 ungroup.grouped_df <- function(x) {
-  as.data.frame(x)
+  attr(x, "vars") <- NULL
+  attr(x, "index") <- NULL
+  attr(x, "labels") <- NULL
+  attr(x, "drop") <- NULL
+
+  class(x) <- setdiff(class(x), "grouped_df")
+  x
 }
 
 make_view <- function(x, env = parent.frame()) {
@@ -78,8 +102,9 @@ make_view <- function(x, env = parent.frame()) {
 }
 
 build_index <- function(x) {
-  splits <- lapply(attr(x, "vars"), eval, x, parent.frame())
+  splits <- lapply(groups(x), eval, x, parent.frame())
   split_id <- id(splits, drop = attr(x, "drop"))
+  
   assert_that(length(split_id) == nrow(x))
 
   attr(x, "labels") <- split_labels(splits, drop = attr(x, "drop"),
