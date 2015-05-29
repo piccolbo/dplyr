@@ -6,29 +6,37 @@
 #'
 #' @param data a tbl or data frame.
 #' @param vars a list of quoted variables.
+#' @param copy If \code{TRUE}, will make copy of input.
 #' @export
 #' @examples
-#' hflights_dt <- tbl_dt(hflights)
-#' group_size(group_by(hflights_dt, Year, Month, DayofMonth))
-#' group_size(group_by(hflights_dt, Dest))
-#' 
-#' monthly <- group_by(hflights_dt, Month)
-#' summarise(monthly, n = n(), delay = mean(ArrDelay))
-grouped_dt <- function(data, vars) {
-  stopifnot(is.data.table(data))
+#' if (require("data.table") && require("nycflights13")) {
+#' flights_dt <- tbl_dt(flights)
+#' group_size(group_by(flights_dt, year, month, day))
+#' group_size(group_by(flights_dt, dest))
+#'
+#' monthly <- group_by(flights_dt, month)
+#' summarise(monthly, n = n(), delay = mean(arr_delay))
+#' }
+grouped_dt <- function(data, vars, copy = TRUE) {
+  stopifnot(data.table::is.data.table(data))
   if (length(vars) == 0) return(tbl_dt(data))
-  
+
   is_name <- vapply(vars, is.name, logical(1))
   if (!all(is_name)) {
     stop("Data tables can only be grouped by variables, not expressions",
       call. = FALSE)
   }
-  setkeyv(data, deparse_all(vars))
 
-  structure(data, vars = vars, class = c("grouped_dt", "tbl_dt", "tbl", class(data)))
+  if (copy) {
+    data <- data.table::copy(data)
+  }
+
+  data.table::setattr(data, "vars", vars)
+  data.table::setattr(data, "class", c("grouped_dt", "tbl_dt", "tbl", class(data)))
+  data
 }
 
-#' @S3method groups grouped_dt
+#' @export
 groups.grouped_dt <- function(x) {
   attr(x, "vars")
 }
@@ -38,45 +46,98 @@ groups.grouped_dt <- function(x) {
 #' @export
 is.grouped_dt <- function(x) inherits(x, "grouped_dt")
 
-#' @S3method print grouped_dt
-print.grouped_dt <- function(x, ...) {
+#' @export
+print.grouped_dt <- function(x, ..., n = NULL, width = NULL) {
   cat("Source: local data table ", dim_desc(x), "\n", sep = "")
   cat("Groups: ", commas(deparse_all(groups(x))), "\n", sep = "")
   cat("\n")
-  trunc_mat(x)
+  print(trunc_mat(x, n = n, width = width))
+  invisible(x)
 }
 
-#' @S3method group_size grouped_dt
+#' @export
 group_size.grouped_dt <- function(x) {
-  summarise(x, n = .N)$n
+  summarise(x, n = n())$n
 }
 
-#' @method group_by data.table
 #' @export
-#' @rdname grouped_dt
-#' @param ... variables to group by
-group_by.data.table <- function(x, ...) {
-  vars <- dots(...)
-  grouped_dt(x, c(groups(x), vars))
+n_groups.grouped_dt <- function(x) {
+  nrow(dt_subset(x, , quote(list(1))))
 }
 
-#' @method group_by tbl_dt
 #' @export
-#' @rdname grouped_dt
-group_by.tbl_dt <- function(x, ...) {
-  vars <- dots(...)
-  grouped_dt(x, c(groups(x), vars))
+group_by_.data.table <- function(.data, ..., .dots, add = FALSE) {
+  groups <- group_by_prepare(.data, ..., .dots = .dots, add = add)
+  grouped_dt(groups$data, groups$groups)
 }
 
-#' @S3method group_by grouped_dt
-group_by.grouped_dt <- function(x, ...) {
-  vars <- dots(...)
-  grouped_dt(x, c(groups(x), vars))
-}
-
-#' @S3method ungroup grouped_dt
+#' @export
 ungroup.grouped_dt <- function(x) {
-  attr(x, "vars") <- NULL
-  class(x) <- setdiff(class(x), "grouped_dt")
+  data.table::setattr(x, "vars", NULL)
+  data.table::setattr(x, "class", setdiff(class(x), "grouped_dt"))
   x
+}
+
+
+# Do ---------------------------------------------------------------------------
+
+#' @export
+do_.grouped_dt <- function(.data, ..., .dots) {
+  args <- lazyeval::all_dots(.dots, ...)
+  env <- lazyeval::common_env(args)
+  named <- named_args(args)
+
+  if (!named) {
+    j <- args[[1]]$expr
+  } else {
+    args <- lapply(args, function(x) call("list", x$expr))
+    j <- as.call(c(quote(list), args))
+  }
+
+  out <- dt_subset(.data, , j, env = env, sd_cols = names(.data))
+
+  if (!named) {
+    grouped_dt(out, groups(.data))
+  } else {
+    tbl_dt(out)
+  }
+}
+
+# Set operations ---------------------------------------------------------------
+
+#' @export
+distinct_.grouped_dt <- function(.data, ..., .dots) {
+  groups <- lazyeval::as.lazy_dots(groups(.data))
+  dist <- distinct_vars(.data, ..., .dots = c(.dots, groups))
+
+  grouped_dt(unique(dist$data, by = dist$vars), groups(.data), copy = FALSE)
+}
+
+
+# Random samples ---------------------------------------------------------------
+
+#' @export
+sample_n.grouped_dt <- function(tbl, size, replace = FALSE, weight = NULL,
+  .env = parent.frame()) {
+
+  idx_call <- substitute(
+    list(`row_` = .I[sample(.N, size = size, replace = replace, prob = weight)]),
+    list(size = size, replace = replace, weight = substitute(weight))
+  )
+  idx <- dt_subset(tbl, , idx_call, env = .env)$row_
+
+  grouped_dt(tbl[idx], groups(tbl))
+}
+
+#' @export
+sample_frac.grouped_dt <- function(tbl, size = 1, replace = FALSE, weight = NULL,
+  .env = parent.frame()) {
+
+  idx_call <- substitute(
+    list(`row_` = .I[sample(.N, size = round(size * .N), replace = replace, prob = weight)]),
+    list(size = size, replace = replace, weight = substitute(weight))
+  )
+  idx <- dt_subset(tbl, , idx_call, env = .env)$row_
+
+  grouped_dt(tbl[idx], groups(tbl))
 }

@@ -1,8 +1,52 @@
 # Environment for caching connections etc
 cache <- new.env(parent = emptyenv())
 
-db_location <- function(path, filename) {
+is_cached <- function(name) exists(name, envir = cache)
+set_cache <- function(name, value) {
+#   message("Setting ", name, " in cache")
+  assign(name, value, envir = cache)
+  value
+}
+get_cache <- function(name) {
+#   message("Getting ", name, " from cache")
+  get(name, envir = cache)
+}
+
+cache_computation <- function(name, computation) {
+  if (is_cached(name)) {
+    get_cache(name)
+  } else {
+    res <- force(computation)
+    set_cache(name, res)
+    res
+  }
+}
+
+load_srcs <- function(f, src_names, quiet = NULL) {
+  if (is.null(quiet)) {
+    quiet <- !identical(Sys.getenv("NOT_CRAN"), "true")
+  }
+
+
+  srcs <- lapply(src_names, function(x) {
+    out <- NULL
+    try(out <- f(x), silent = TRUE)
+    if (is.null(out) && !quiet) {
+      message("Could not instantiate ", x, " src")
+    }
+    out
+  })
+
+  compact(setNames(srcs, src_names))
+}
+
+
+db_location <- function(path = NULL, filename) {
   if (!is.null(path)) {
+    # Check that path is a directory and is writeable
+    if (!file.exists(path) || !file.info(path)$isdir) {
+      stop(path, " is not a directory", call. = FALSE)
+    }
     if (!is_writeable(path)) stop("Can not write to ", path, call. = FALSE)
     return(file.path(path, filename))
   }
@@ -19,21 +63,3 @@ db_location <- function(path, filename) {
 is_writeable <- function(x) {
   unname(file.access(x, 2) == 0)
 }
-
-tmp_sqlite <- function() {
-  if (is.null(cache$temp_sqlite_src)) {
-    path <- tempfile(fileext = ".sqlite3")
-    cache$temp_sqlite_src <- src_sqlite(path, create = TRUE)
-  }
-
-  cache$temp_sqlite_src
-}
-
-tmp_postgres <- function() {
-  if (is.null(cache$temp_postgres_src)) {
-    cache$temp_postgres_src <- src_postgres("test")
-  }
-  
-  cache$temp_postgres_src
-}
-

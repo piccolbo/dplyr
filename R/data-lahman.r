@@ -7,20 +7,24 @@
 #' Michael Friendly, Dennis Murphy and Martin Monkman. See the documentation
 #' for that package for documentation of the inidividual tables.
 #'
-#' @param path location to look for and cache SQLite database. If \code{NULL},
-#'   the default, will first try storing in the installed package directory, and
-#'   if that isn't writeable, a temporary directory.
-#' @param dbname,... Arguments passed to \code{\link{src_postgresql}} on first
-#'   load. The defaults assume you have a local postgresql install with
-#'   \code{lahman} database already created.
-#' @export
+#' @param ... Other arguments passed to \code{src} on first
+#'   load. For mysql and postgresql, the defaults assume you have a local
+#'   server with \code{lahman} database already created.
+#'   For \code{lahman_srcs}, character vector of names giving srcs to generate.
+#' @param quiet if \code{TRUE}, suppress messages about databases failing to
+#'   connect.
+#' @param type src type.
+#' @keywords internal
 #' @examples
-#' lahman_sqlite()
-#' batting <- tbl(lahman_sqlite(), "Batting")
-#' batting
+#' # Connect to a local sqlite database, if already created
+#' if (has_lahman("sqlite")) {
+#'   lahman_sqlite()
+#'   batting <- tbl(lahman_sqlite(), "Batting")
+#'   batting
+#' }
 #'
 #' # Connect to a local postgres database with lahman database, if available
-#' if (has_lahman_postgres()) {
+#' if (has_lahman("postgres")) {
 #'   lahman_postgres()
 #'   batting <- tbl(lahman_postgres(), "Batting")
 #' }
@@ -30,95 +34,75 @@ NULL
 #' @export
 #' @rdname lahman
 lahman_sqlite <- function(path = NULL) {
-  if (!is.null(cache$lahman_sqlite)) return(cache$lahman_sqlite)
-  
   path <- db_location(path, "lahman.sqlite")
-  
-  if (!file.exists(path)) {
-    message("Caching Lahman db at ", path)
-    src <- src_sqlite(path, create = TRUE)
-    cache_lahman(src, quiet = FALSE)
-  } else {
-    src <- src_sqlite(path)
-  }
-  
-  cache$lahman_sqlite <- src
-  src
+  copy_lahman(src_sqlite(path = path, create = TRUE))
 }
 
 #' @export
 #' @rdname lahman
 lahman_postgres <- function(dbname = "lahman", ...) {
-  if (!is.null(cache$lahman_postgres)) return(cache$lahman_postgres)
-  
-  src <- src_postgres(dbname, ...)
-  
-  missing <- setdiff(lahman_tables(), src_tbls(src))
-  if (length(missing) > 0) {
-    cache_lahman(src, quiet = FALSE)
-  }
-  
-  cache$lahman_postgres <- src
-  src
+  copy_lahman(src_postgres(dbname, ...))
 }
 
 #' @export
 #' @rdname lahman
 lahman_mysql <- function(dbname = "lahman", ...) {
-  if (!is.null(cache$lahman_mysql)) return(cache$lahman_mysql)
-  
-  src <- src_mysql(dbname, ...)
-  
-  missing <- setdiff(lahman_tables(), src_tbls(src))
-  if (length(missing) > 0) {
-    cache_lahman(src, quiet = FALSE)
-  }
-  
-  cache$lahman_mysql <- src
-  src
+  copy_lahman(src_mysql(dbname, ...))
 }
 
-
-#' @name lahman
 #' @export
-has_lahman <- function(src) {
-  switch(src,
-    sqlite = file.exists(db_location(NULL, "lahman.sqlite")),
-    mysql = succeeds(src_mysql("lahman")),
-    postgres = succeeds(src_postgres("lahman")),
-    stop("Unknown src ", src, call. = FALSE)
-  )
-}
-succeeds <- function(x) {
-  ok <- FALSE
-  try({
-    force(x)
-    ok <- TRUE
-  }, silent = TRUE)
-  
-  ok 
+#' @rdname lahman
+lahman_df <- function() {
+  src_df("Lahman")
 }
 
+#' @export
+#' @rdname lahman
+lahman_dt <- function() {
+  src_dt("Lahman")
+}
 
-cache_lahman <- function(src, index = TRUE, quiet = FALSE) {
-  if (!require("Lahman")) {
-    stop("Please install the Lahman package", call. = FALSE)
-  }
-  
+#' @rdname lahman
+#' @export
+copy_lahman <- function(src, ...) {
+  # Create missing tables
   tables <- setdiff(lahman_tables(), src_tbls(src))
   for(table in tables) {
-    df <- get(table, "package:Lahman")
-    if (!quiet) message("Creating table ", table)
-    
-    ids <- as.list(names(df)[grepl("ID$", names(df))])
-    copy_to(src, df, table, indexes = if (index) ids, temporary = FALSE)
-  }
-  
-  invisible(TRUE)
-}
+    df <- getExportedValue("Lahman", table)
+    message("Creating table: ", table)
 
+    ids <- as.list(names(df)[grepl("ID$", names(df))])
+    copy_to(src, df, table, indexes = ids, temporary = FALSE)
+  }
+
+  src
+}
 # Get list of all non-label data frames in package
 lahman_tables <- function() {
   tables <- data(package = "Lahman")$results[, 3]
   tables[!grepl("Labels", tables)]
+}
+
+#' @rdname lahman
+#' @export
+has_lahman <- function(type, ...) {
+  if (!requireNamespace("Lahman", quietly = TRUE)) return(FALSE)
+  if (missing(type)) return(TRUE)
+
+  succeeds(lahman(type, ...), quiet = TRUE)
+}
+
+#' @rdname lahman
+#' @export
+lahman_srcs <- function(..., quiet = NULL) {
+  load_srcs(lahman, c(...), quiet = quiet)
+}
+
+lahman <- function(type, ...) {
+  if (missing(type)) {
+    src_df("Lahman")
+  } else {
+    f <- match.fun(paste0("lahman_", type))
+    f(...)
+  }
 }

@@ -7,132 +7,221 @@
 #' @keywords internal
 #' @param data a tbl or data frame.
 #' @param vars a list of quoted variables.
-#' @param lazy if \code{TRUE}, index will be computed lazily every time it
-#'   is needed. If \code{FALSE}, index will be computed up front on object
-#'   creation.
 #' @param drop if \code{TRUE} preserve all factor levels, even those without
 #'   data.
-grouped_df <- function(data, vars, lazy = TRUE, drop = TRUE) {
+#' @export
+grouped_df <- function(data, vars, drop = TRUE) {
   if (length(vars) == 0) {
     return(tbl_df(data))
   }
 
-  assert_that(is.data.frame(data), is.list(vars), is.flag(lazy), is.flag(drop))
-  
-  attr(data, "vars") <- vars
-  attr(data, "drop") <- drop
-  if (!lazy) {
-    data <- build_index(data)
-  }
-
-  class(data) <- c("grouped_df", "tbl_df", "tbl", class(data))
-  data
-}
-
-#' @S3method groups data.frame
-groups.data.frame <- function(x) {
-  attr(x, "vars")
-}
-
-#' @rdname grouped_df
-#' @method is.lazy grouped_df
-#' @export
-is.lazy.grouped_df <- function(x) {
-  is.null(attr(x, "index")) || is.null(attr(x, "labels"))
+  assert_that(is.data.frame(data), is.list(vars), all(sapply(vars,is.name)), is.flag(drop))
+  grouped_df_impl(data, unname(vars), drop)
 }
 
 #' @rdname grouped_df
 #' @export
 is.grouped_df <- function(x) inherits(x, "grouped_df")
 
-#' @S3method print grouped_df
-print.grouped_df <- function(x, ...) {
+#' @export
+print.grouped_df <- function(x, ..., n = NULL, width = NULL) {
   cat("Source: local data frame ", dim_desc(x), "\n", sep = "")
   cat("Groups: ", commas(deparse_all(groups(x))), "\n", sep = "")
   cat("\n")
-  trunc_mat(x)
+  print(trunc_mat(x, n = n, width = width))
+  invisible(x)
 }
 
-#' @S3method group_size grouped_df
-group_size.grouped_df <- function(x) {
-  if (is.lazy(x)) x <- build_index(x)
-  vapply(attr(x, "index"), length, integer(1))
-}
-
-
-#' @param x object (data frame or \code{\link{tbl_df}}) to group
-#' @param ... unquoted variables to group by
-#' @method group_by data.frame
 #' @export
-#' @rdname grouped_df
-group_by.data.frame <- function(x, ..., drop = TRUE) {
-  vars <- named_dots(...)
-  grouped_df(x, c(groups(x), vars), lazy = FALSE)
+group_size.grouped_df <- function(x) {
+  group_size_grouped_cpp(x)
 }
 
-#' @S3method as.data.frame grouped_df
+#' @export
+n_groups.grouped_df <- function(x) {
+  length(attr(x, "indices"))
+}
+
+#' @export
+groups.grouped_df <- function(x) {
+  attr(x, "vars")
+}
+
+#' @export
 as.data.frame.grouped_df <- function(x, row.names = NULL,
-                                            optional = FALSE, ...) {
-#   if (!is.null(row.names)) warning("row.names argument ignored", call. = FALSE)
-#   if (!identical(optional, FALSE)) warning("optional argument ignored", call. = FALSE)
-
-  attr(x, "vars") <- NULL
-  attr(x, "index") <- NULL
-  attr(x, "labels") <- NULL
-  attr(x, "drop") <- NULL
-
-  class(x) <- setdiff(class(x), c("grouped_df", "tbl_df", "tbl"))
+                                     optional = FALSE, ...) {
+  x <- ungroup(x)
+  class(x) <- "data.frame"
   x
 }
 
-#' @S3method ungroup grouped_df
+#' @export
 ungroup.grouped_df <- function(x) {
-  attr(x, "vars") <- NULL
-  attr(x, "index") <- NULL
-  attr(x, "labels") <- NULL
-  attr(x, "drop") <- NULL
-
-  class(x) <- setdiff(class(x), "grouped_df")
-  x
+  ungroup_grouped_df(x)
 }
 
-make_view <- function(x, env = parent.frame()) {
-  if (is.lazy(x)) stop("No index present", call. = FALSE)
-  view(x, attr(x, "index"), parent.frame())
-}
+#' @export
+`[.grouped_df` <- function(x, i, j, ...) {
+  y <- NextMethod()
 
-build_index <- function(x) {
-  splits <- lapply(groups(x), eval, x, parent.frame())
-  split_id <- id(splits, drop = attr(x, "drop"))
-  
-  assert_that(length(split_id) == nrow(x))
+  group_vars <- vapply(groups(x), as.character, character(1))
 
-  attr(x, "labels") <- split_labels(splits, drop = attr(x, "drop"),
-    id = split_id)
-  attr(x, "index") <- split_indices(split_id, attr(split_id, "n"))
-
-  x
-}
-
-split_labels <- function(splits, drop, id = plyr::id(splits, drop = TRUE)) {
-  if (length(splits) == 0) return(data.frame())
-
-  if (drop) {
-    # Need levels which occur in data
-    representative <- which(!duplicated(id))[order(unique(id))]
-    as_df(lapply(splits, function(x) x[representative]))
+  if (!all(group_vars %in% names(y))) {
+    tbl_df(y)
   } else {
-    unique_values <- llply(splits, ulevels)
-    names(unique_values) <- names(splits)
-    rev(expand.grid(rev(unique_values), stringsAsFactors = FALSE))
+    grouped_df(y, groups(x))
+  }
+
+}
+
+# One-table verbs --------------------------------------------------------------
+
+#' @export
+select_.grouped_df <- function(.data, ..., .dots) {
+  dots <- lazyeval::all_dots(.dots, ...)
+
+  vars <- select_vars_(names(.data), dots,
+    include = as.character(groups(.data)))
+
+  select_impl(.data, vars)
+}
+
+#' @export
+rename_.grouped_df <- function(.data, ..., .dots) {
+  dots <- lazyeval::all_dots(.dots, ...)
+  vars <- rename_vars_(names(.data), dots)
+
+  select_impl(.data, vars)
+}
+
+
+# Do ---------------------------------------------------------------------------
+
+
+#' @export
+do_.grouped_df <- function(.data, ..., env = parent.frame(), .dots) {
+  # Force computation of indices
+  if (is.null(attr(.data, "indices"))) {
+    .data <- grouped_df_impl(.data, attr(.data, "vars"),
+      attr(.data, "drop") %||% TRUE)
+  }
+
+  # Create ungroup version of data frame suitable for subsetting
+  group_data <- ungroup(.data)
+
+  args <- lazyeval::all_dots(.dots, ...)
+  named <- named_args(args)
+  env <- new.env(parent = lazyeval::common_env(args))
+  labels <- attr(.data, "labels")
+
+  index <- attr(.data, "indices")
+  n <- length(index)
+  m <- length(args)
+
+  # Special case for zero-group/zero-row input
+  if (n == 0) {
+    env$. <- group_data
+
+    if (!named) {
+      out <- eval(args[[1]]$expr, envir = env)[0, , drop = FALSE]
+      return(label_output_dataframe(labels, list(list(out)), groups(.data)))
+    } else {
+      out <- setNames(rep(list(list()), length(args)), names(args))
+      return(label_output_list(labels, out, groups(.data)))
+    }
+  }
+
+  # Create new environment, inheriting from parent, with an active binding
+  # for . that resolves to the current subset. `_i` is found in environment
+  # of this function because of usual scoping rules.
+  makeActiveBinding(env = env, ".", function(value) {
+    if (missing(value)) {
+      group_data[index[[`_i`]] + 1L, , drop = FALSE]
+    } else {
+      group_data[index[[`_i`]] + 1L, ] <<- value
+    }
+  })
+
+  out <- replicate(m, vector("list", n), simplify = FALSE)
+  names(out) <- names(args)
+  p <- progress_estimated(n * m, min_time = 2)
+
+  for (`_i` in seq_len(n)) {
+    for (j in seq_len(m)) {
+      out[[j]][`_i`] <- list(eval(args[[j]]$expr, envir = env))
+      p$tick()$print()
+    }
+  }
+
+  if (!named) {
+    label_output_dataframe(labels, out, groups(.data))
+  } else {
+    label_output_list(labels, out, groups(.data))
   }
 }
 
-ulevels <- function(x) {
-  if (is.factor(x)) {
-    levs <- levels(x)
-    factor(levs, levels = levs)
-  } else {
-    sort(unique(x))
-  }
+# Set operations ---------------------------------------------------------------
+
+#' @export
+distinct_.grouped_df <- function(.data, ..., .dots) {
+  groups <- lazyeval::as.lazy_dots(groups(.data))
+  dist <- distinct_vars(.data, ..., .dots = c(.dots, groups))
+
+  grouped_df(distinct_impl(dist$data, dist$vars), groups(.data))
 }
+
+
+# Random sampling --------------------------------------------------------------
+
+
+#' @export
+sample_n.grouped_df <- function(tbl, size, replace = FALSE, weight = NULL,
+  .env = parent.frame()) {
+
+  assert_that(is.numeric(size), length(size) == 1, size >= 0)
+  weight <- substitute(weight)
+
+  index <- attr(tbl, "indices")
+  sampled <- lapply(index, sample_group, frac = FALSE,
+    tbl = tbl, size = size, replace = replace, weight = weight, .env = .env)
+  idx <- unlist(sampled) + 1
+
+  grouped_df(tbl[idx, , drop = FALSE], vars = groups(tbl))
+}
+
+#' @export
+sample_frac.grouped_df <- function(tbl, size = 1, replace = FALSE, weight = NULL,
+  .env = parent.frame()) {
+
+  assert_that(is.numeric(size), length(size) == 1, size >= 0)
+  if (size > 1 && !replace) {
+    stop("Sampled fraction can't be greater than one unless replace = TRUE",
+      call. = FALSE)
+  }
+  weight <- substitute(weight)
+
+  index <- attr(tbl, "indices")
+  sampled <- lapply(index, sample_group, frac = TRUE,
+    tbl = tbl, size = size, replace = replace, weight = weight, .env = .env)
+  idx <- unlist(sampled) + 1
+
+  grouped_df(tbl[idx, , drop = FALSE], vars = groups(tbl))
+}
+
+sample_group <- function(tbl, i, frac = FALSE, size, replace = TRUE,
+  weight = NULL, .env = parent.frame()) {
+  n <- length(i)
+  if (frac) size <- round(size * n)
+
+  check_size(size, n, replace)
+
+  # weight use standard evaluation in this function
+  if (!is.null(weight)) {
+    weight <- eval(weight, tbl[i + 1, , drop = FALSE], .env)
+    weight <- check_weight(weight, n)
+  }
+
+  i[sample.int(n, size, replace = replace, prob = weight)]
+}
+
+

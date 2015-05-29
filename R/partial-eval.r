@@ -13,20 +13,20 @@
 #' do this 100% perfectly. \code{partial_eval} uses the following heuristic:
 #'
 #' \itemize{
-#'   \item If the source variables are known, and the symbol matches a source
+#'   \item If the tbl variables are known, and the symbol matches a tbl
 #'     variable, then remote.
 #'   \item If the symbol is defined locally, local.
 #'   \item Otherwise, remote.
 #' }
 #'
 #' @param call an unevaluated expression, as produced by \code{\link{quote}}
-#' @param source a tbl object
+#' @param tbl a tbl object
 #' @param env environment in which to search for local values
 #' @export
 #' @keywords internal
 #' @examples
-#' data("baseball", package = "plyr")
-#' bdf <- tbl_df(baseball)
+#' if (require("Lahman")) {
+#' bdf <- tbl_df(Batting)
 #' partial_eval(quote(year > 1980), bdf)
 #'
 #' ids <- c("ansonca01", "forceda01", "mathebo01")
@@ -44,18 +44,21 @@
 #' partial_eval(quote(year > f(1980)), bdf)
 #' partial_eval(quote(year > local(f(1980))), bdf)
 #'
-#' # For testing you can also use it with the source omitted
+#' # For testing you can also use it with the tbl omitted
 #' partial_eval(quote(1 + 2 * 3))
 #' x <- 1
 #' partial_eval(quote(x ^ y))
-partial_eval <- function(call, source = NULL, env = parent.frame()) {
+#' }
+partial_eval <- function(call, tbl = NULL, env = parent.frame()) {
   if (is.atomic(call)) return(call)
 
-  if (is.list(call)) {
-    lapply(call, partial_eval, source = source, env = env)
+  if (inherits(call, "lazy_dots")) {
+    lapply(call, function(l) partial_eval(l$expr, tbl, l$env))
+  } else if (is.list(call)) {
+    lapply(call, partial_eval, tbl = tbl, env = env)
   } else if (is.symbol(call)) {
     name <- as.character(call)
-    if (!is.null(source) && name %in% tbl_vars(source)) {
+    if (!is.null(tbl) && name %in% tbl_vars(tbl)) {
       call
     } else if (exists(name, env)) {
       eval(call, env)
@@ -68,33 +71,17 @@ partial_eval <- function(call, source = NULL, env = parent.frame()) {
     name <- as.character(call[[1]])
     if (name == "local") {
       eval(call[[2]], env)
+    } else if (name %in% c("$", "[[", "[")) {
+      # Subsetting is always done locally
+      eval(call, env)
     } else if (name == "remote") {
       call[[2]]
     } else {
-      call[-1] <- lapply(call[-1], partial_eval, source = source, env = env)
+      call[-1] <- lapply(call[-1], partial_eval, tbl = tbl, env = env)
       call
     }
   } else {
     stop("Unknown input type: ", class(call), call. = FALSE)
   }
-}
-
-#' Evaluate variable names in the context of a tbl.
-#'
-#' @param exprs a list of unevaluated expressions
-#' @param tbl a tbl
-#' @param parent the parent frame in which to evaluate variables/functions
-#'   not found in \code{tbl}
-#' @export
-#' @examples
-#' var_eval(list(quote(mpg:wt)), mtcars)
-var_eval <- function(exprs, tbl, parent = parent.frame()) {
-  nm <- tbl_vars(tbl)
-  nms_list <- as.list(setNames(seq_along(nm), nm))
-
-  idx <- lapply(exprs, eval, nms_list, parent)
-  symbols <- lapply(nm, as.symbol)
-  
-  symbols[unlist(idx)]
 }
 

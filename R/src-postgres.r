@@ -1,19 +1,19 @@
 #' Connect to postgresql.
-#' 
-#' Use \code{src_postgresql} to connect to an existing postgresql database,
-#' and \code{tbl} to connect to tables within that database. 
-#' If you are running a local postgresql database, leave all parameters set as 
-#' their defaults to connect. If you're connecting to a remote database, 
+#'
+#' Use \code{src_postgres} to connect to an existing postgresql database,
+#' and \code{tbl} to connect to tables within that database.
+#' If you are running a local postgresql database, leave all parameters set as
+#' their defaults to connect. If you're connecting to a remote database,
 #' ask your database administrator for the values of these variables.
-#' 
+#'
 #' @template db-info
 #' @param dbname Database name
 #' @param host,port Host name and port number of database
 #' @param user,password User name and password (if needed)
-#' @param options other additional options passed to command line client
 #' @param ... for the src, other arguments passed on to the underlying
-#'   database connector, \code{dbConnect}. For the tbl, included for 
+#'   database connector, \code{dbConnect}. For the tbl, included for
 #'   compatibility with the generic, but otherwise ignored.
+#' @param src a postgres src created with \code{src_postgres}.
 #' @param from Either a string giving the name of table in database, or
 #'   \code{\link{sql}} described a derived table or compound join.
 #' @export
@@ -21,19 +21,20 @@
 #' \dontrun{
 #' # Connection basics ---------------------------------------------------------
 #' # To connect to a database first create a src:
-#' my_db <- src_postgresql(host = "blah.com", user = "hadley",
+#' my_db <- src_postgres(host = "blah.com", user = "hadley",
 #'   password = "pass")
 #' # Then reference a tbl within that src
 #' my_tbl <- tbl(my_db, "my_table")
 #' }
 #'
 #' # Here we'll use the Lahman database: to create your own local copy,
-#' # create a local database called "lahman", or tell lahman_postgresql() how to 
+#' # create a local database called "lahman", or tell lahman_postgres() how to
 #' # a database that you can write to
-#' 
+#'
 #' if (has_lahman("postgres")) {
+#' lahman_p <- lahman_postgres()
 #' # Methods -------------------------------------------------------------------
-#' batting <- tbl(lahman_postgres(), "Batting")
+#' batting <- tbl(lahman_p, "Batting")
 #' dim(batting)
 #' colnames(batting)
 #' head(batting)
@@ -44,37 +45,38 @@
 #' arrange(batting, playerID, desc(yearID))
 #' summarise(batting, G = mean(G), n = n())
 #' mutate(batting, rbi2 = if(is.null(AB)) 1.0 * R / AB else 0)
-#' 
+#'
 #' # note that all operations are lazy: they don't do anything until you
-#' # request the data, either by `print()`ing it (which shows the first ten 
+#' # request the data, either by `print()`ing it (which shows the first ten
 #' # rows), by looking at the `head()`, or `collect()` the results locally.
 #'
 #' system.time(recent <- filter(batting, yearID > 2010))
 #' system.time(collect(recent))
-#' 
+#'
 #' # Group by operations -------------------------------------------------------
 #' # To perform operations by group, create a grouped object with group_by
 #' players <- group_by(batting, playerID)
 #' group_size(players)
 #'
 #' summarise(players, mean_g = mean(G), best_ab = max(AB))
-#' best_year <- filter(players, AB == max(AB) || G == max(G))
-#' progress <- mutate(players, cyear = yearID - min(yearID) + 1, 
-#'  rank(desc(AB)), cumsum(AB, yearID))
-#'  
+#' best_year <- filter(players, AB == max(AB) | G == max(G))
+#' progress <- mutate(players,
+#'   cyear = yearID - min(yearID) + 1,
+#'   ab_rank = rank(desc(AB)),
+#'   cumulative_ab = order_by(yearID, cumsum(AB)))
+#'
 #' # When you group by multiple level, each summarise peels off one level
 #' per_year <- group_by(batting, playerID, yearID)
 #' stints <- summarise(per_year, stints = max(stint))
 #' filter(stints, stints > 3)
 #' summarise(stints, max(stints))
-#' mutate(stints, cumsum(stints, yearID))
+#' mutate(stints, order_by(yearID, cumsum(stints)))
 #'
 #' # Joins ---------------------------------------------------------------------
-#' player_info <- select(tbl(lahman_postgres(), "Master"), playerID, hofID, 
-#'   birthYear)
-#' hof <- select(filter(tbl(lahman_postgres(), "HallOfFame"), inducted == "Y"),
-#'  hofID, votedBy, category)
-#' 
+#' player_info <- select(tbl(lahman_p, "Master"), playerID, birthYear)
+#' hof <- select(filter(tbl(lahman_p, "HallOfFame"), inducted == "Y"),
+#'  playerID, votedBy, category)
+#'
 #' # Match players and their hall of fame data
 #' inner_join(player_info, hof)
 #' # Keep all players, match hof data where available
@@ -86,94 +88,93 @@
 #'
 #' # Arbitrary SQL -------------------------------------------------------------
 #' # You can also provide sql as is, using the sql function:
-#' batting2008 <- tbl(lahman_postgresql(),
-#'   sql("SELECT * FROM Batting WHERE YearID = 2008"))
+#' batting2008 <- tbl(lahman_p,
+#'   sql('SELECT * FROM "Batting" WHERE "yearID" = 2008'))
 #' batting2008
 #' }
-src_postgres <- function(dbname = "", host = "", port = "", user = "", 
-                         password = "", ...) {
-  if (!require("RPostgreSQL")) {
+src_postgres <- function(dbname = NULL, host = NULL, port = NULL, user = NULL,
+                         password = NULL, ...) {
+  if (!requireNamespace("RPostgreSQL", quietly = TRUE)) {
     stop("RPostgreSQL package required to connect to postgres db", call. = FALSE)
   }
 
-  con <- dbi_connect(PostgreSQL(), host = host, dbname = dbname, user = user,
-    password = password, port = port, ...)
-  info <- db_info(con)
-  
-  src_sql("postgres", con, 
+  user <- user %||% if (in_travis()) "postgres" else ""
+
+  con <- dbConnect(RPostgreSQL::PostgreSQL(), host = host %||% "", dbname = dbname %||% "",
+    user = user, password = password %||% "", port = port %||% "", ...)
+  info <- dbGetInfo(con)
+
+  src_sql("postgres", con,
     info = info, disco = db_disconnector(con, "postgres"))
 }
 
-#' @method tbl src_postgres
 #' @export
 #' @rdname src_postgres
 tbl.src_postgres <- function(src, from, ...) {
-  tbl_sql("postgres", src = src, from = from)
+  tbl_sql("postgres", src = src, from = from, ...)
 }
 
-#' @S3method brief_desc src_postgres
-brief_desc.src_postgres <- function(x) {
+#' @export
+src_desc.src_postgres <- function(x) {
   info <- x$info
   host <- if (info$host == "") "localhost" else info$host
-  
-  paste0("postgres ", info$serverVersion, " [", info$user, "@", 
+
+  paste0("postgres ", info$serverVersion, " [", info$user, "@",
     host, ":", info$port, "/", info$dbname, "]")
 }
 
-#' @S3method translate_env src_postgres
-translate_env.src_postgres <- function(x) {
+#' @export
+src_translate_env.src_postgres <- function(x) {
   sql_variant(
-    n = function() sql("count(*)"),
-    # Extra aggregate functions
-    cor = sql_prefix("corr"),
-    cov = sql_prefix("covar_samp"),
-    sd =  sql_prefix("stddev_samp"),
-    var = sql_prefix("var_samp"),
-    all = sql_prefix("bool_and"),
-    any = sql_prefix("bool_or"),
-    paste = function(x, collapse) build_sql("string_agg(", x, collapse, ")")
+    base_scalar,
+    sql_translator(.parent = base_agg,
+      n = function() sql("count(*)"),
+      cor = sql_prefix("corr"),
+      cov = sql_prefix("covar_samp"),
+      sd =  sql_prefix("stddev_samp"),
+      var = sql_prefix("var_samp"),
+      all = sql_prefix("bool_and"),
+      any = sql_prefix("bool_or"),
+      paste = function(x, collapse) build_sql("string_agg(", x, collapse, ")")
+    ),
+    base_win
   )
 }
 
-#' @S3method translate_window_env tbl_postgres
-translate_window_env.tbl_postgres <- function(x) {
-  by <- translate_sql_q(groups(x))
-  
-  windowed_sql <- function(f, x, order) {
-    build_sql(sql(f), "(", x, ") OVER ",
-      "(PARTITION BY ", by, 
-      if (!is.null(order)) build_sql(" ORDER BY ", order),
-      ")"
-    )
-  }    
-  
-  nullary_win <- function(f) {
-    function(order = NULL) windowed_sql(f, NULL, order)
-  }
-  unary_agg <- function(f) {
-    function(x) windowed_sql(f, x, NULL)
-  }
-  unary_win <- function(f) {
-    function(x, order = NULL) windowed_sql(f, x, order)
-  }
-  
-  sql_variant(.parent = translate_env.src_postgres(),
-    
-    mean = unary_agg("AVG"),
-    sum = unary_agg("SUM"),
-    min = unary_agg("MIN"),
-    max = unary_agg("MAX"),
-    
-    n = function() build_sql("COUNT(*) OVER (PARTITION BY ", by, ")"),
-    
-    cummean = unary_win("AVG"),
-    cumsum = unary_win("SUM"),
-    cummin = unary_win("MIN"),
-    cummax = unary_win("MAX"),
-    
-    order = nullary_win("ROW_NUMBER"), 
-    rank = nullary_win("RANK"),
-    lag = nullary_win("LAG"),
-    lead = nullary_win("LEAD")
-  )
+# DBI methods ------------------------------------------------------------------
+
+# Doesn't return TRUE for temporary tables
+#' @export
+db_has_table.PostgreSQLConnection <- function(con, table, ...) {
+  table %in% db_list_tables(con)
+}
+
+#' @export
+db_begin.PostgreSQLConnection <- function(con, ...) {
+  dbGetQuery(con, "BEGIN TRANSACTION")
+}
+
+# http://www.postgresql.org/docs/9.3/static/sql-explain.html
+#' @export
+db_explain.PostgreSQLConnection <- function(con, sql, format = "text", ...) {
+  format <- match.arg(format, c("text", "json", "yaml", "xml"))
+
+  exsql <- build_sql("EXPLAIN ",
+    if (!is.null(format)) build_sql("(FORMAT ", sql(format), ") "),
+    sql)
+  expl <- dbGetQuery(con, exsql)
+
+  paste(expl[[1]], collapse = "\n")
+}
+
+#' @export
+db_insert_into.PostgreSQLConnection <- function(con, table, values, ...) {
+  cols <- lapply(values, escape, collapse = NULL, parens = FALSE, con = con)
+  col_mat <- matrix(unlist(cols, use.names = FALSE), nrow = nrow(values))
+
+  rows <- apply(col_mat, 1, paste0, collapse = ", ")
+  values <- paste0("(", rows, ")", collapse = "\n, ")
+
+  sql <- build_sql("INSERT INTO ", ident(table), " VALUES ", sql(values))
+  dbGetQuery(con, sql)
 }

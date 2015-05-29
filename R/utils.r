@@ -3,17 +3,31 @@ dots <- function(...) {
 }
 
 named_dots <- function(...) {
-  args <- dots(...)
+  auto_name(dots(...))
+}
 
-  nms <- names2(args)
+auto_names <- function(x) {
+  nms <- names2(x)
   missing <- nms == ""
-  if (all(!missing)) return(args)
+  if (all(!missing)) return(nms)
 
   deparse2 <- function(x) paste(deparse(x, 500L), collapse = "")
-  defaults <- vapply(args[missing], deparse2, character(1), USE.NAMES = FALSE)
+  defaults <- vapply(x[missing], deparse2, character(1), USE.NAMES = FALSE)
 
-  names(args)[missing] <- defaults
-  args
+  nms[missing] <- defaults
+  nms
+}
+
+deparse_trunc <- function(x, width = getOption("width")) {
+  text <- deparse(x, width.cutoff = width)
+  if (length(text) == 1 && nchar(text) < width) return(text)
+
+  paste0(substr(text[1], 1, width - 3), "...")
+}
+
+auto_name <- function(x) {
+  names(x) <- auto_names(x)
+  x
 }
 
 is.lang <- function(x) {
@@ -21,7 +35,7 @@ is.lang <- function(x) {
 }
 is.lang.list <- function(x) {
   if (is.null(x)) return(TRUE)
-  
+
   is.list(x) && all_apply(x, is.lang)
 }
 on_failure(is.lang.list) <- function(call, env) {
@@ -35,8 +49,8 @@ on_failure(all_names) <- function(call, env) {
   x_nms <- names(eval(call$x, env))
   nms <- eval(call$nms, env)
   extra <- setdiff(x_nms, nms)
-  
-  paste0(call$x, " has named components: ", paste0(extra, collapse = ", "), ".", 
+
+  paste0(call$x, " has named components: ", paste0(extra, collapse = ", "), ".",
     "Should only have names: ", paste0(nms, collapse = ","))
 }
 
@@ -58,8 +72,6 @@ drop_last <- function(x) {
   x[-length(x)]
 }
 
-last <- function(x) x[[length(x)]]
-
 compact <- function(x) Filter(Negate(is.null), x)
 
 names2 <- function(x) {
@@ -79,17 +91,50 @@ as_df <- function(x) {
   x
 }
 
-
-
-wrap <- function(...) {
-  string <- paste0(...)
-  wrapped <- strwrap(string, width = getOption("width"), exdent = 2)
-  paste0(wrapped, collapse = "\n")
-}
-
 deparse_all <- function(x) {
   deparse2 <- function(x) paste(deparse(x, width.cutoff = 500L), collapse = "")
   vapply(x, deparse2, FUN.VALUE = character(1))
 }
 
 commas <- function(...) paste0(..., collapse = ", ")
+
+in_travis <- function() identical(Sys.getenv("TRAVIS"), "true")
+
+named <- function(...) {
+  x <- c(...)
+
+  missing_names <- names2(x) == ""
+  names(x)[missing_names] <- x[missing_names]
+
+  x
+}
+
+unique_name <- local({
+  i <- 0
+
+  function() {
+    i <<- i + 1
+    paste0("_W", i)
+  }
+})
+
+isFALSE <- function(x) identical(x, FALSE)
+
+substitute_q <- function(x, env) {
+  call <- substitute(substitute(x, env), list(x = x))
+  eval(call)
+}
+
+
+succeeds <- function(x, quiet = FALSE) {
+  tryCatch({x; TRUE}, error = function(e) {
+    if (!quiet) message("Error: ", e$message)
+    FALSE
+  })
+}
+
+is_1d <- function(x) {
+  # is.atomic() is TRUE for atomic vectors AND NULL!
+  # dimension check is for matrices and data.frames
+  ((is.atomic(x) && !is.null(x)) || is.list(x)) && length(dim(x)) <= 1
+}

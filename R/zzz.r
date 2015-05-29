@@ -1,18 +1,23 @@
-.onAttach <- function(libname, pkgname) {
-  packageStartupMessage("The dplyr API is currently rapidly evolving. ",
-    "I recommend that you don't rely on this for production, but ",
-    "feel free to explore. If you encounter a clear bug, please file a ",
-    "minimal reproducible example at https://github.com/hadley/dplyr/issues.",
-    "For questions and other discussion, please use ", 
-    "https://groups.google.com/group/manipulatr")
-
+.onLoad <- function(libname, pkgname) {
   op <- options()
   op.dplyr <- list(
-    dplyr.show_sql = FALSE,
-    dplyr.explain_sql = FALSE
+    dplyr.strict_sql = FALSE,
+    dplyr.print_min = 10L,
+    dplyr.print_max = 20L
   )
   toset <- !(names(op.dplyr) %in% names(op))
   if(any(toset)) options(op.dplyr[toset])
 
   invisible()
+}
+
+.onAttach <- function(libname, pkgname) {
+
+  setHook(packageEvent("plyr", "attach"), function(...) {
+    packageStartupMessage(rule())
+    packageStartupMessage("You have loaded plyr after dplyr - this is likely ",
+      "to cause problems.\nIf you need functions from both plyr and dplyr, ",
+      "please load plyr first, then dplyr:\nlibrary(plyr); library(dplyr)")
+    packageStartupMessage(rule())
+  })
 }
